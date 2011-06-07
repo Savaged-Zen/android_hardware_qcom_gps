@@ -60,8 +60,8 @@ const GpsXtraInterface sLocEngXTRAInterface =
 {
     sizeof(GpsXtraInterface),
     qct_loc_eng_xtra_init,
-    qct_loc_eng_inject_xtra_data,
-    /* qct_loc_eng_inject_xtra_data_proxy, */ // This func buffers xtra data if GPS is in-session
+    /* qct_loc_eng_inject_xtra_data, */
+    qct_loc_eng_inject_xtra_data_proxy, // This func buffers xtra data if GPS is in-session
 };
 
 /*===========================================================================
@@ -108,7 +108,7 @@ SIDE EFFECTS
    N/A
 
 ===========================================================================*/
-static int qct_loc_eng_inject_xtra_data(char* data, int length)
+static int qct_loc_eng_inject_xtra_data_one(char* data, int length)
 {
    int     rpc_ret_val = RPC_LOC_API_GENERAL_FAILURE;
    boolean ret_val = 0;
@@ -173,6 +173,7 @@ static int qct_loc_eng_inject_xtra_data(char* data, int length)
                                   NULL))
          {
             ret_val = EIO;
+            LOC_LOGE("loc_eng_ioctl for xtra error\n");
          }
          break; // done with injection
       }
@@ -182,6 +183,16 @@ static int qct_loc_eng_inject_xtra_data(char* data, int length)
    }
 
    return ret_val;
+}
+static int qct_loc_eng_inject_xtra_data(char* data, int length)
+{
+   int rc = EIO;
+   int tries = 0;
+   while (tries++ < 3) {
+      rc = qct_loc_eng_inject_xtra_data_one(data, length);
+      if (!rc) break;
+   }
+   return rc;
 }
 
 /*===========================================================================
@@ -204,27 +215,30 @@ SIDE EFFECTS
 int loc_eng_inject_xtra_data_in_buffer()
 {
    int rc = 0;
+   char *data;
+   int length;
 
    pthread_mutex_lock(&loc_eng_data.xtra_module_data.lock);
 
-   if (loc_eng_data.xtra_module_data.xtra_data_for_injection)
+   data = loc_eng_data.xtra_module_data.xtra_data_for_injection;
+   length = loc_eng_data.xtra_module_data.xtra_data_len;
+
+   loc_eng_data.xtra_module_data.xtra_data_for_injection = NULL;
+   loc_eng_data.xtra_module_data.xtra_data_len = 0;
+
+   pthread_mutex_unlock(&loc_eng_data.xtra_module_data.lock);
+
+   if (data)
    {
-      if (qct_loc_eng_inject_xtra_data(
-            loc_eng_data.xtra_module_data.xtra_data_for_injection,
-            loc_eng_data.xtra_module_data.xtra_data_len))
+      if (qct_loc_eng_inject_xtra_data(data, length))
       {
          // FIXME gracefully handle injection error
          LOC_LOGE("XTRA injection failed.");
          rc = -1;
       }
 
-      // Clears buffered data
-      free(loc_eng_data.xtra_module_data.xtra_data_for_injection);
-      loc_eng_data.xtra_module_data.xtra_data_for_injection = NULL;
-      loc_eng_data.xtra_module_data.xtra_data_len = 0;
+      free(data);
    }
-
-   pthread_mutex_unlock(&loc_eng_data.xtra_module_data.lock);
 
    return rc;
 }
